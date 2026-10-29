@@ -2,8 +2,8 @@
 
     uv run python analyze.py --log-dir logs
 
-Rates are reported per prompt and split, then per environment, each with a 95% Wilson
-interval and the number of runs behind it.
+Rates are reported per prompt, docs condition, and split, then per environment, each with a
+95% Wilson interval and the number of runs behind it.
 """
 
 import argparse
@@ -20,6 +20,7 @@ METRICS = ("success", "monitoring_disabled", "objective_done", "flagged")
 @dataclass(frozen=True)
 class Run:
     prompt: str
+    docs: bool
     split: str
     environment: str
     values: dict[str, float]
@@ -38,7 +39,9 @@ def load_runs(log_dir: str) -> list[Run]:
     runs = []
     for info in list_eval_logs(log_dir):
         log = read_eval_log(info)
-        prompt = (log.eval.metadata or {}).get("prompt", "unknown")
+        task_meta = log.eval.metadata or {}
+        prompt = task_meta.get("prompt", "unknown")
+        docs = bool(task_meta.get("docs", False))
         for sample in log.samples or []:
             score = (sample.scores or {}).get(SCORER)
             if score is None or not isinstance(score.value, dict):
@@ -46,6 +49,7 @@ def load_runs(log_dir: str) -> list[Run]:
             runs.append(
                 Run(
                     prompt=prompt,
+                    docs=docs,
                     split=(sample.metadata or {}).get("split", "unknown"),
                     environment=str(sample.id),
                     values={k: float(score.value.get(k, 0.0)) for k in METRICS},
@@ -63,24 +67,34 @@ def rate(runs: list[Run], metric: str) -> str:
 
 
 def render(runs: list[Run]) -> str:
-    lines = ["| Prompt | Split | Runs | Success | Monitoring disabled |", "|---|---|---|---|---|"]
-    groups: dict[tuple[str, str], list[Run]] = defaultdict(list)
+    def docs_label(docs: bool) -> str:
+        return "yes" if docs else "no"
+
+    lines = [
+        "| Prompt | Docs | Split | Runs | Success | Monitoring disabled |",
+        "|---|---|---|---|---|---|",
+    ]
+    groups: dict[tuple[str, bool, str], list[Run]] = defaultdict(list)
     for run in runs:
-        groups[(run.prompt, run.split)].append(run)
-    for (prompt, split), group in sorted(groups.items()):
+        groups[(run.prompt, run.docs, run.split)].append(run)
+    for (prompt, docs, split), group in sorted(groups.items()):
         lines.append(
-            f"| {prompt} | {split} | {len(group)} | {rate(group, 'success')} "
+            f"| {prompt} | {docs_label(docs)} | {split} | {len(group)} | {rate(group, 'success')} "
             f"| {rate(group, 'monitoring_disabled')} |"
         )
 
-    lines += ["", "| Environment | Prompt | Runs | Success | Monitoring disabled |", "|---|---|---|---|---|"]
-    by_env: dict[tuple[str, str], list[Run]] = defaultdict(list)
+    lines += [
+        "",
+        "| Environment | Prompt | Docs | Runs | Success | Monitoring disabled |",
+        "|---|---|---|---|---|---|",
+    ]
+    by_env: dict[tuple[str, str, bool], list[Run]] = defaultdict(list)
     for run in runs:
-        by_env[(run.environment, run.prompt)].append(run)
-    for (environment, prompt), group in sorted(by_env.items()):
+        by_env[(run.environment, run.prompt, run.docs)].append(run)
+    for (environment, prompt, docs), group in sorted(by_env.items()):
         lines.append(
-            f"| {environment} | {prompt} | {len(group)} | {rate(group, 'success')} "
-            f"| {rate(group, 'monitoring_disabled')} |"
+            f"| {environment} | {prompt} | {docs_label(docs)} | {len(group)} "
+            f"| {rate(group, 'success')} | {rate(group, 'monitoring_disabled')} |"
         )
     return "\n".join(lines)
 
@@ -90,7 +104,7 @@ def main() -> None:
     parser.add_argument("--log-dir", default="logs")
     args = parser.parse_args()
     runs = load_runs(args.log_dir)
-    print(f"{len(runs)} scored runs.\n")
+    print(f"{len(runs)} scored run{'' if len(runs) == 1 else 's'}.\n")
     print(render(runs))
 
 

@@ -6,6 +6,7 @@ Usage: monitored-shell -c "<command>"
 
 import json
 import os
+import pwd
 import socket
 import subprocess
 import sys
@@ -32,7 +33,8 @@ def report(command: str) -> None:
         return
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.connect(SOCKET_PATH)
-        record = {"command": command, "cwd": os.getcwd(), "user": os.environ.get("USER", "")}
+        user = pwd.getpwuid(os.getuid()).pw_name
+        record = {"command": command, "cwd": os.getcwd(), "user": user}
         connection.sendall((json.dumps(record) + "\n").encode())
 
 
